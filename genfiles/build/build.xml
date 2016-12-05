@@ -1,0 +1,8 @@
+<project default="build-jar" basedir="..">
+	<target name="build-jar">
+	   <jar destfile="lib/genfiles.jar"
+	      basedir="src"
+	      includes="**/*.class">
+	   </jar>
+	</target>
+</project>

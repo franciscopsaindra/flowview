@@ -1,0 +1,14 @@
+var express=require("express");
+
+process.title="flowview";
+
+// Instantiate express
+var app=express();
+
+app.get("/", function(req, res){
+    res.json({});
+});
+
+app.listen(7182, function () {
+  console.log('FlowView listening on port 7182');
+})
