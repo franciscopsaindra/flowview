@@ -19,6 +19,33 @@ import java.util.Properties;
  * 
  * Creates one file per second
  * 
+ * Configuration in conf/createfiles.properties
+ * 
+ * Specification of bras, vlan or dlsam without traffic in conf/state.properties. The file
+ * is read before generating each file, and may be changed during execution
+ * 
+ * Accepts as an argument the number of seconds to run
+ * 	TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
+
+ * 
+ * Fields in the generated CDR
+ * <idx> is the index of the client, from 1 to <number-of-clients>
+ * 
+ * 	LAST_UPDATED: yyyy-mm-dd hh:mm:ss
+ *  START_TIME: yyyy-mm-dd hh:mm:ss
+ *  SESSION_ID: session-id-<number>, starting from 1 and being increased in each session
+ *  STATE: "A" or "C"
+ *  TELEPHONE: Number from 1 to <number-of-clients>
+ *  LOGIN: <idx>@speedy
+ *  NAS_PORT: Calculated based on the number of clients, dslams and bras
+ *  NAS_IP_ADDRESS: 10.0.0.<idx % nBRAS>
+ *  LAST_DOWNLOADED_BYTES: random number from 0 to MAX_BYTES_DOWN
+ *  LAST_UPLOADED_BYTES: random number from 0 to MAX_BYTES_UP
+ *  LAST_DURATION: Session time. Will be random
+ *  IP_ADDRESS: 172.*.*.*
+ *  LAST_SERVER: server<idx%numRadius>
+ *  TERMINATION_CAUSE: User-Request
+ * 
  * @author francisco
  *
  */
@@ -53,7 +80,7 @@ public class CreateFiles {
 
 	public static void main(String[] args) throws IOException, InterruptedException, URISyntaxException, FileNotFoundException {
 		
-		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd hh-mm-ss");
+		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
 		
 		Properties confProperties = new Properties();
 		confProperties.load(new FileInputStream(new File(CreateFiles.class.getResource("/conf/createfiles.properties").toURI())));
@@ -63,9 +90,15 @@ public class CreateFiles {
 		int numSeconds = Integer.parseInt(confProperties.getProperty("numSeconds", "100"));
 		int numBRAS = Integer.parseInt(confProperties.getProperty("numBRAS", "10"));
 		int numDSLAM = Integer.parseInt(confProperties.getProperty("numDSLAM", "100"));
+		int numRadius = Integer.parseInt(confProperties.getProperty("numRadius", "6"));
+		
+		// Check bounds
+		if(numClients > 4096*4096) throw new IllegalArgumentException("Too many clients");
+		if(numBRAS > 255) throw new IllegalArgumentException("Too many BRAS");
+		if(numDSLAM > numBRAS) throw new IllegalArgumentException("Number of DSLAM > Number of BRAS");
 		
 		int brasFactor = 256 / numBRAS; 
-		int dslamFactor = (numDSLAM*4092)/(numClients*numBRAS);
+		int dslamFactor = (numDSLAM*4096)/(numClients*numBRAS);
 		
 		if(args.length == 1){
 			numSeconds = Integer.parseInt(args[0]);
@@ -89,15 +122,18 @@ public class CreateFiles {
 		for(int i = 0; i < numClients; i++) clientStates.add(i, new ClientState(0, 0));
 		System.out.printf("Client states created\n");
 		
-		//START_DTM_UTC, LAST_UPDATE, SESSION_ID, STATE, TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
+		//LAST_UPDATE, START_TIME, SESSION_ID, STATE, TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
 		
 		long startTime = new Date().getTime();
 		StringBuilder sb = new StringBuilder();
 		int fileNumber = 0;
+		processState();
 		while(fileNumber < numSeconds){
 			fileNumber++;
 			PrintWriter pw=new PrintWriter(new FileWriter(tmpDir+"."+FILE_PREFIX+fileNumber+".tmp"));
 			for(int j=0; j < cdrPerFile; j++){
+				
+				// Get a random client
 				int idx = (int)Math.floor((Math.random()*numClients));
 				
 				// Skip if VLAN is in the list of broken VLAN
@@ -120,8 +156,8 @@ public class CreateFiles {
 				Date currentDate = new Date();
 				if(s.sessionId == 0){
 					sb.setLength(0);
-					sb.append(sdf.format(currentDate)).append(","); // start time
-					sb.append(sdf.format(currentDate)).append(","); // updated
+					sb.append(sdf.format(currentDate)).append(","); // last_updated
+					sb.append(sdf.format(currentDate)).append(","); // start_time
 					lastSessionId++; s.sessionId = lastSessionId;   
 					s.startTime = currentDate.getTime();            
 					sb.append("session-id-"+lastSessionId).append(","); // session-id
@@ -134,12 +170,12 @@ public class CreateFiles {
 					sb.append(0).append(",");
 					sb.append(0).append(",");
 					sb.append("172."+(idx/(256*256))%256+"."+(idx/256)%256+"."+idx%256).append(",");
-					sb.append("server"+(idx/(numClients/6))%6).append(",");
+					sb.append("server"+(idx%numRadius)).append(",");
 					sb.append("User-Request");
 				} else {
 					sb.setLength(0);
-					sb.append(sdf.format(currentDate)).append(",");
-					sb.append(sdf.format(s.startTime)).append(",");
+					sb.append(sdf.format(currentDate)).append(","); // last_updated
+					sb.append(sdf.format(s.startTime)).append(","); // start_time
 					sb.append("session-id-"+s.sessionId).append(",");
 					sb.append("C").append(",");
 					sb.append(idx).append(",");
@@ -150,7 +186,7 @@ public class CreateFiles {
 					sb.append((int)Math.floor(Math.random()*MAX_BYTES_UP)).append(",");
 					sb.append((currentDate.getTime()-s.startTime)/1000).append(",");
 					sb.append("172."+(idx/(256*256))%256+"."+(idx/256)%256+"."+idx%256).append(",");
-					sb.append("server"+(idx/(numClients/6))%6).append(",");
+					sb.append("server"+(idx%numRadius)).append(",");
 					sb.append("User-Request");
 					s.sessionId = 0;
 					s.startTime = 0;
