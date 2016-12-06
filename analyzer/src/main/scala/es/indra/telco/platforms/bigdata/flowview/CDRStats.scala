@@ -5,15 +5,17 @@ import org.apache.spark.SparkConf
 import org.apache.spark.streaming.Seconds
 import org.apache.spark.streaming.StreamingContext
 import java.io.File
+import org.apache.log4j.{LogManager, Level}
 import org.apache.spark.rdd.RDD.rddToPairRDDFunctions
 import org.apache.spark.streaming.dstream.DStream.toPairDStreamFunctions
 
 
 object CDRStats {
-  val batchSeconds = 5
-  val windowSize = 3
   
-  //START_DTM_UTC, LAST_UPDATE, SESSION_ID, STATE, TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
+  val batchSeconds = 5  // Seconds in a batch
+  val windowSize = 3    // Number of batch per window
+  
+  //LAST_UPDATE, START_TIME, SESSION_ID, STATE, TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
 
   case class CDR(
       lastUpdate: String, 
@@ -30,7 +32,8 @@ object CDRStats {
       userIPAddress: String,
       lastServer: String,
       terminationCause: String,
-      dslam: String)
+      dslam: String
+  )
       
   case class Session(
       phone: String,
@@ -38,7 +41,7 @@ object CDRStats {
       nasIPAddress: String,
       dslam: String,
       lastServer: String
-      )
+  )
 
   def getDslam(nasport: String, nasIPAddress: String, sessionId: String): String = {
     if(sessionId.contains("atm")){
@@ -56,11 +59,14 @@ object CDRStats {
       return
     }
     
+    val logger = LogManager.getRootLogger();
+    
     val inputDirectory = args(0)
     if(!new File(inputDirectory).exists()){
-      printf("%s directory not found", inputDirectory)
+      printf("%s directory not found\n", inputDirectory)
       return
     }
+    
     val outputDirectory = args(1)
     if(!new File(outputDirectory).exists()){
       printf("%s directory not found", outputDirectory)
@@ -69,9 +75,11 @@ object CDRStats {
     
     val tmpDir = System.getProperty("java.io.tmpdir")
     
-    val conf = new SparkConf().setMaster("local[2]").setAppName("CDR Streaming")
+    val conf = new SparkConf().setMaster("local[2]").setAppName("Flowview analyzer")
     val ssc = new StreamingContext(conf, Seconds(batchSeconds))
     //ssc.sparkContext.hadoopConfiguration.set("textinputformat.record.delimiter", "\r\n\r\n");
+    
+    logger.warn("CDR Analyzer started")
     
     // Stream of raw CDR
     val cdrStream = ssc.textFileStream(inputDirectory).map(line => {
@@ -95,6 +103,7 @@ object CDRStats {
     
     sessionStates.foreachRDD(rdd => {
       // Number of sessions per topology element ((nasIPAddress, dslam), <number of sessions>)
+      // item._2 is a session object
       val aggrSessions = rdd.map(item => ((item._2.nasIPAddress, item._2.dslam), 1)).reduceByKey((a, b) => (a+b))
       val currentTimestamp = new java.util.Date().getTime()
       //aggrSessions.saveAsTextFile(outputDirectory + "/sessions/sessions" + currentTimestamp)
@@ -106,21 +115,21 @@ object CDRStats {
     aggrCdrStream.foreachRDD(rdd => {
       val currentTimestamp = new java.util.Date().getTime()
       //rdd.saveAsTextFile("outputDirectory + "/cdrRate/cdrRate" + currentTimestamp)
-      rdd.saveAsTextFile(outputDirectory + "/cdrRate/cdrRate")
+      rdd.saveAsTextFile(outputDirectory + "/cdrRate")
     })
     
     // Stream of number of CDR received per topology element per second ((nasIPAddress, dslam), <cdr rate>)
-    val aggrCdrStreamMean = cdrStream.window(Seconds(batchSeconds*windowSize))
+    val aggrCdrStreamMean = cdrStream.window(Seconds(batchSeconds * windowSize))
     .map(item => ((item._2.nasIPAddress, item._2.dslam), 1)).reduceByKey((a, b) => (a+b))
-    .map(item => (item._1, item._2/windowSize))
+    .map(item => (item._1, item._2 / (batchSeconds * windowSize)))
     
     // Stream of derivative of number of CDR received per topology element per second ((nasIPAddress, dslam), <cdr rate-rate>)
     val aggrCdrStreamDerivative = aggrCdrStream.fullOuterJoin(aggrCdrStreamMean)
-    .map(item => (item._1, (item._2._1.getOrElse(0)-item._2._2.getOrElse(0)).toFloat/(batchSeconds*windowSize)))
+    .map(item => (item._1, (item._2._1.getOrElse(0)-item._2._2.getOrElse(0)).toFloat/(batchSeconds * windowSize)))
     aggrCdrStreamDerivative.foreachRDD(rdd => {
       val currentTimestamp = new java.util.Date().getTime()
       // rdd.saveAsTextFile(outputDirectory + "/cdrRateDerivative/cdrRateDerivative" + currentTimestamp)
-      rdd.saveAsTextFile(outputDirectory + "/cdrRateDerivative/cdrRateDerivative")
+      rdd.saveAsTextFile(outputDirectory + "/cdrRateDerivative")
     })
     
     ssc.checkpoint(tmpDir + "/sparkcheckpoint")

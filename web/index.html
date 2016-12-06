@@ -20,7 +20,7 @@
         };
 
         // Instantiates and draws our chart, passing in some options.
-        var chart = new google.visualization.Sankey(document.getElementById('sankey_basic'));
+        var chart = new google.visualization.Sankey(document.getElementById('mygraph'));
 		var dataType = location.search.substring(1);
         $.getJSON(dataType, function(jsData, status){
 		
@@ -38,7 +38,7 @@
     </script>
   </head>
   <body>
-    <div id="sankey_basic" style="width: 900px; height: 300px;"></div>
+    <div id="mygraph" style="width: 900px; height: 300px;"></div>
   </body>
 </html>
 

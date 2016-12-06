@@ -111,7 +111,7 @@ public class CreateFiles {
 			return;
 		}
 
-		System.out.printf("Creating files for %d clients and %d CDR per file\n", numClients, cdrPerFile);
+		System.out.printf("Creating files for %d clients and %d CDR per file for %d seconds\n", numClients, cdrPerFile, numSeconds);
 		System.out.printf("Using %d DSLAM and %d BRAS \n", numDSLAM, numBRAS);
 		
 		// Empty input directory

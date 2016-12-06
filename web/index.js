@@ -4,12 +4,13 @@ const Q = require("q");
 
 // Each line has the format ((nasip-addr, dslam), number-of-users)
 const lineRegex = /\(\((.+),(.+)\),(.+)\)/;
+
 // Location of files
 const sessionsDirectory = "/tmp/streamoutput/sessions/";
 const cdrRateDirectory = "/tmp/streamoutput/cdrRate/";
 const cdrRateDerivativeDirectory = "/tmp/streamoutput/cdrRateDerivative/";
 // Name of this process
-process.title="flowview";
+process.title="flowview-web";
 
 // Instantiate express
 var app=express();
@@ -33,7 +34,7 @@ app.get("/cdrRateDerivative", function(req, res){
 });
 
 app.listen(7182, function () {
-    console.log('FlowView listening on port 7182');
+    console.log('FlowView listening in port 7182');
 });
 
 function serveFile(res, dirName){
