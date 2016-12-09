@@ -9,11 +9,13 @@ import org.apache.log4j.{LogManager, Level}
 import org.apache.spark.rdd.RDD.rddToPairRDDFunctions
 import org.apache.spark.streaming.dstream.DStream.toPairDStreamFunctions
 
+import org.apache.spark.SparkContext._
+
 
 object CDRStats {
   
   val batchSeconds = 5  // Seconds in a batch
-  val windowSize = 3    // Number of batch per window
+  val windowSize = 3    // Number of batches per window
   
   //LAST_UPDATE, START_TIME, SESSION_ID, STATE, TELEPHONE, LOGIN, NAS_PORT, NAS_IP_ADDRESS, LAST_DOWNLOADED_BYTES, LAST_UPLOADED_BYTES, LAST_DURATION_SECONDS, USER_IP_ADDRESS, LASTSERVER, TERMINATION_CAUSE
 
@@ -52,6 +54,14 @@ object CDRStats {
     }
   }
   
+  def calcMean(values: Iterable[Double]): Double = {values.reduce((a, b) => (a+b)) / values.count(value => true)}
+  
+  def calcVariance(values: Iterable[Double], mean: Double): Double = { values.map(value => (value - mean) * (value - mean)).reduce((a, b) => (a + b)) / values.count(value => true) }
+  
+  
+  /**
+   * 
+   */
   def main(args: Array[String]): Unit = {
     
     if(args.length != 2){
@@ -112,26 +122,28 @@ object CDRStats {
     
     // Stream of number of CDR received per topology element ((nasIPAddress, dslam), <number of cdr>)
     val aggrCdrStream = cdrStream.map(item => ((item._2.nasIPAddress, item._2.dslam), 1)).reduceByKey((a, b) => (a+b))
-    aggrCdrStream.foreachRDD(rdd => {
-      val currentTimestamp = new java.util.Date().getTime()
-      //rdd.saveAsTextFile("outputDirectory + "/cdrRate/cdrRate" + currentTimestamp)
-      rdd.saveAsTextFile(outputDirectory + "/cdrRate")
-    })
+      .mapValues(_.toDouble/batchSeconds)
     
-    // Stream of number of CDR received per topology element per second ((nasIPAddress, dslam), <cdr rate>)
-    val aggrCdrStreamMean = cdrStream.window(Seconds(batchSeconds * windowSize))
-    .map(item => ((item._2.nasIPAddress, item._2.dslam), 1)).reduceByKey((a, b) => (a+b))
-    .map(item => (item._1, item._2 / (batchSeconds * windowSize)))
-    
-    // Stream of derivative of number of CDR received per topology element per second ((nasIPAddress, dslam), <cdr rate-rate>)
-    val aggrCdrStreamDerivative = aggrCdrStream.fullOuterJoin(aggrCdrStreamMean)
-    .map(item => (item._1, (item._2._1.getOrElse(0)-item._2._2.getOrElse(0)).toFloat/(batchSeconds * windowSize)))
-    aggrCdrStreamDerivative.foreachRDD(rdd => {
-      val currentTimestamp = new java.util.Date().getTime()
-      // rdd.saveAsTextFile(outputDirectory + "/cdrRateDerivative/cdrRateDerivative" + currentTimestamp)
-      rdd.saveAsTextFile(outputDirectory + "/cdrRateDerivative")
-    })
-    
+    // Stream of ((nasIPAddress, dslam), (meanCDRRate, stdevCDRRate))
+    val aggrCdrRateStreamStats = aggrCdrStream.window(Seconds(batchSeconds * windowSize)).mapValues(item => item.toDouble)
+      .groupByKey.mapValues(values => (calcMean(values), Math.sqrt(calcVariance(values, calcMean(values)))))
+      
+    // Stream of (nasIPAddress, dslam), (Option[CDRRate], Option[(meanCDRRate, stdevCDRRate)])
+    val aggrCdrRateStreamStatsFull = aggrCdrStream.fullOuterJoin(aggrCdrRateStreamStats)
+    // Stream of (nasIPAddress, dslam), CDRRate, meanCDRRate, stdevCDRRate, CDRRateDerivative)
+      .map(item => {
+        val networkElement = item._1
+        val currentCDRRate = item._2._1.getOrElse[Double](0)
+        val stats = item._2._2.getOrElse[(Double, Double)]((0, 0))
+        val meanCDRRate = stats._1
+        val stdevCDRRate = stats._2
+        (networkElement, currentCDRRate, meanCDRRate, stdevCDRRate, (currentCDRRate - meanCDRRate)/(batchSeconds * windowSize))
+      })
+      
+   aggrCdrRateStreamStatsFull.foreachRDD(rdd => {
+       rdd.saveAsTextFile(outputDirectory + "/cdrRate")
+   })
+   
     ssc.checkpoint(tmpDir + "/sparkcheckpoint")
     
     ssc.start()
