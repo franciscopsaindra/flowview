@@ -93,9 +93,8 @@ public class CreateFiles {
 		int numRadius = Integer.parseInt(confProperties.getProperty("numRadius", "6"));
 		
 		// Check bounds
-		if(numClients > 4096*4096) throw new IllegalArgumentException("Too many clients");
-		if(numBRAS > 255) throw new IllegalArgumentException("Too many BRAS");
-		if(numDSLAM > numBRAS) throw new IllegalArgumentException("Number of DSLAM > Number of BRAS");
+		if(numClients > 4096*4096) throw new IllegalArgumentException("Too many clients "+numClients);
+		if(numBRAS > 255) throw new IllegalArgumentException("Too many BRAS "+numBRAS);
 		
 		int brasFactor = 256 / numBRAS; 
 		int dslamFactor = (numDSLAM*4096)/(numClients*numBRAS);
@@ -129,6 +128,7 @@ public class CreateFiles {
 		int fileNumber = 0;
 		processState();
 		while(fileNumber < numSeconds){
+			Date currentDate = new Date();
 			fileNumber++;
 			PrintWriter pw=new PrintWriter(new FileWriter(tmpDir+"."+FILE_PREFIX+fileNumber+".tmp"));
 			for(int j=0; j < cdrPerFile; j++){
@@ -153,13 +153,13 @@ public class CreateFiles {
 				}
 				
 				ClientState s = clientStates.get(idx);
-				Date currentDate = new Date();
+				Date eventDate = new Date(currentDate.getTime() + (1000/cdrPerFile)*j);
 				if(s.sessionId == 0){
 					sb.setLength(0);
-					sb.append(sdf.format(currentDate)).append(","); // last_updated
-					sb.append(sdf.format(currentDate)).append(","); // start_time
+					sb.append(sdf.format(eventDate)).append(","); // last_updated
+					sb.append(sdf.format(eventDate)).append(","); // start_time
 					lastSessionId++; s.sessionId = lastSessionId;   
-					s.startTime = currentDate.getTime();            
+					s.startTime = eventDate.getTime();            
 					sb.append("session-id-"+lastSessionId).append(","); // session-id
 					sb.append("A").append(",");
 					sb.append(idx).append(",");	// Telephone
@@ -174,7 +174,7 @@ public class CreateFiles {
 					sb.append("User-Request");
 				} else {
 					sb.setLength(0);
-					sb.append(sdf.format(currentDate)).append(","); // last_updated
+					sb.append(sdf.format(eventDate)).append(","); // last_updated
 					sb.append(sdf.format(s.startTime)).append(","); // start_time
 					sb.append("session-id-"+s.sessionId).append(",");
 					sb.append("C").append(",");
@@ -184,7 +184,7 @@ public class CreateFiles {
 					sb.append("10.0.0."+(idx%(256/brasFactor))).append(","); // nasip
 					sb.append((int)Math.floor(Math.random()*MAX_BYTES_DOWN)).append(",");
 					sb.append((int)Math.floor(Math.random()*MAX_BYTES_UP)).append(",");
-					sb.append((currentDate.getTime()-s.startTime)/1000).append(",");
+					sb.append((eventDate.getTime()-s.startTime)/1000).append(",");
 					sb.append("172."+(idx/(256*256))%256+"."+(idx/256)%256+"."+idx%256).append(",");
 					sb.append("server"+(idx%numRadius)).append(",");
 					sb.append("User-Request");
@@ -200,8 +200,11 @@ public class CreateFiles {
 			System.out.printf("Created %d.txt. Sleeping for %d milliseconds\n", fileNumber, sleepMillis);
 			Thread.sleep(sleepMillis);
 		}
+		
+		Thread.sleep(6000);
+		
 		// Empty input directory
-		emptyInputDirectory(outputDir);
+		//emptyInputDirectory(outputDir);
 	}
 	
 	private static void processState() throws FileNotFoundException, URISyntaxException, IOException{

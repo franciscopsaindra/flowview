@@ -1,0 +1,60 @@
+<html>
+  <head>
+	<meta http-equiv="efresh" content="5">
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+    <script type="text/javascript">
+      google.charts.load('current', {'packages':['corechart']});
+      google.charts.setOnLoadCallback(drawChart);
+
+      function drawChart() {
+			var data = google.visualization.arrayToDataTable([
+        	['DSLAM', 'Seconds ago', 'id', 'BRAS', 'sigma']
+ 			]);
+
+        // Sets chart options.
+        var options = {
+          width: 1000,
+	      height: 500,
+	      hAxis: {slantedText:true, slantedTextAngle:90 }
+        };
+
+        // Instantiates and draws our chart, passing in some options.
+        var chart = new google.visualization.BubbleChart(document.getElementById('mygraph'));
+        $.getJSON("/events")
+        	.done(function(jsData){
+        		var currentTimestamp = Date.now();
+        		var sortedJsData = jsData.sort(function(e1, e2){ 
+        			if(e1.topElement.nas === e2.topElement.nas) return (e1.topElement.dslam > e2.topElement.dslam)
+        			else return (e1.topElement.nas > e2.topElement.nas)
+        			});
+        		
+        		function buildDslamIndex(data){
+        			var currentIndex = 1;
+        			var indices = {};
+        			for(var idx = 0; idx < data.length; idx++){
+        				var thisDslam = data[idx].topElement.dslam;
+        				if(!indices[thisDslam]){ indices[thisDslam] = currentIndex++;}
+        			}
+        			return indices;
+        		}
+        		
+        		var dslamIndex = buildDslamIndex(sortedJsData);
+        		var rows = [['DSLAM', 'Seconds ago', 'id', 'BRAS', 'sigma']];
+		  		for(var i = 0; i < sortedJsData.length; i++){
+		  			var item = sortedJsData[i];
+		  			rows.push([item.topElement.dslam, (currentTimestamp - item.timestamp)/1000, dslamIndex[item.topElement.dslam], item.topElement.nas, item.sigma]);
+			  	}
+				var data = google.visualization.arrayToDataTable(rows);
+				chart.draw(data, options);
+        	})
+        	.fail(function(jqxhr, textStatus, error){
+        		alert(error);
+        	})
+      }
+    </script>
+  </head>
+  <body>
+    <div id="mygraph"></div>
+  </body>
+</html>
