@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+	<property>
+  		<name>hive.metastore.warehouse.dir</name>
+  		<value>/hive/warehouse</value>
+	</property>
+	<property>
+		<name>javax.jdo.option.ConnectionURL</name>
+		<value>jdbc:derby:;databaseName=/hive/metastore_db;create=true</value>
+	</property>
+</configuration>

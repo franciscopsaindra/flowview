@@ -2,10 +2,13 @@ package es.indra.telco.platforms.bigdata.flowview
 
 
 import org.apache.spark.SparkConf
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types._
 import org.apache.spark.streaming.Seconds
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.State
 import org.apache.spark.streaming.StateSpec
+import org.apache.spark.streaming.Time
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
@@ -102,7 +105,32 @@ object CDRStats {
     val ssc = new StreamingContext(conf, Seconds(batchSeconds))
     //ssc.sparkContext.hadoopConfiguration.set("textinputformat.record.delimiter", "\r\n\r\n");
     
-    logger.info("CDR Analyzer started")
+    val sparkSession = SparkSession.builder().enableHiveSupport().getOrCreate()
+    import sparkSession.implicits._
+
+    
+    logger.warn("CDR Analyzer started")
+    
+    // Create schema for sessions
+    val sessionsSchema = StructType(Seq(
+        StructField("timeMillis", LongType, false),
+        StructField("bras", StringType, false),
+        StructField("dslam", StringType, false),
+        StructField("sessions", FloatType, false)
+     ))
+    
+    // Create schema for cdrStats
+    val cdrStatsSchema = StructType(Seq(
+        StructField("timeMillis", LongType, false),
+        StructField("bras", StringType, false),
+        StructField("dslam", StringType, false),
+        StructField("cdrRate", FloatType, false),
+        StructField("cdrRateChange", FloatType, false),
+        StructField("startCDRRatio", FloatType, false),
+        StructField("shortStopCDRRatio", FloatType, false)
+     ))
+     
+     sparkSession.sql("CREATE TABLE IF NOT EXISTS cdrStats (timeMillis BIGINT, bras STRING, dslam STRING, cdrRate FLOAT, cdrRateChange FLOAT, startCDRRatio FLOAT, shortStopCDRRatio FLOAT)")
     
     // Stream of raw CDR
     val cdrStream = ssc.textFileStream(inputDirectory).map(line => {
@@ -161,7 +189,7 @@ object CDRStats {
    // State is last cdrRate 4tuple
    // Returned value is (<timestamp>, <totalCDRRate>, <totalCDRRateChange>, <shortStopRatio>, <startStopRatio>)
    //val updateLastCDRRateState = (topologyElement: (String, String), cdrRateVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]) => {
-   def updateLastCDRRateState(topologyElement: (String, String), cdrRateVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]): Option[(Long, Float, Float, Float, Float)] = {
+   def updateLastCDRRateState(time: Time, topologyElement: (String, String), cdrRateVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]): Option[(Long, String, String, Float, Float, Float, Float)] = {
      // New state is last received data
      val lastState = state.getOption().getOrElse[(Float, Float, Float, Float)]((0, 0, 0, 0))
      
@@ -184,7 +212,7 @@ object CDRStats {
      val startCDRRatio = if(currentCDRRateVals._1 > 0 && currentCDRRateVals._1 > minCDRThreshold) (currentCDRRateVals._2 / currentCDRRateVals._1) else 1
      
      // Calculate output
-     val currentTimestamp = new java.util.Date().getTime()
+     val currentTimestamp = time
      
      if(
          totalCDRRateChange <= totalCDRDecreaseThreshold ||
@@ -192,13 +220,14 @@ object CDRStats {
          shortStopCDRRatio >= shortStopCDRRatioThreshold ||
          startCDRRatio <= startCDRRatioThreshold
          )
-     Some(currentTimestamp, currentCDRRateVals._1, totalCDRRateChange, startCDRRatio, shortStopCDRRatio)
+     Some(time.milliseconds, topologyElement._1, topologyElement._2, currentCDRRateVals._1, totalCDRRateChange, startCDRRatio, shortStopCDRRatio)
      else None
    }
     
    val cdrStats = aggrCdrStream.mapWithState(StateSpec.function(updateLastCDRRateState _))
    cdrStats.foreachRDD(rdd => {
      rdd.saveAsTextFile(outputDirectory + "/cdrStats")
+     rdd.toDF("timeMillis", "bras", "dslam", "cdrRate", "cdrRateChange", "startCDRRatio", "shortStopCDRRatio").write.insertInto("cdrStats")
    })
    
    ssc.checkpoint(tmpDir + "/sparkcheckpoint")
