@@ -1,8 +1,0 @@
-{
-  "name": "flowview_parser",
-  "version": "0.0.1",
-  "dependencies": {
-    "express": "^4.14.0",
-    "q": "^1.4.1"
-  }
-}

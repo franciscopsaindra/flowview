@@ -18,8 +18,14 @@ import org.apache.spark.rdd.RDD.rddToPairRDDFunctions
 import org.apache.spark.streaming.dstream.DStream.toPairDStreamFunctions
 import scala.collection.mutable.ArrayBuffer
 
-import org.apache.spark.SparkContext._
+import slick.driver.DerbyDriver.api._
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
+import slick.jdbc.GetResult._
 
+import org.apache.spark.SparkContext._
 
 object CDRStats {
   
@@ -71,6 +77,8 @@ object CDRStats {
    */
   def main(args: Array[String]): Unit = {
     
+    val logger = LogManager.getRootLogger();
+    
     // Read configuration
     val configUrl = getClass.getResource("/analyzer.properties")
     val source = scala.io.Source.fromURL(configUrl)
@@ -84,54 +92,52 @@ object CDRStats {
     val totalCDRDecreaseThreshold = properties.getProperty("totalCDRDecreaseThreshold", "1.5").toFloat
     val shortStopCDRRatioThreshold = properties.getProperty("shortStopCDRRatioThreshold", "0.3").toFloat
     val startCDRRatioThreshold = properties.getProperty("startCDRRatioThreshold", "0.2").toFloat
+    val applyThresholds = properties.getProperty("applyThresholds", "false").toBoolean
     val inputDirectory = if(args.length > 0) args(0) else properties.getProperty("inputDirectory")
-    val outputDirectory = if(args.length > 1) args(1) else properties.getProperty("outputDirectory")
     
-    val logger = LogManager.getRootLogger();
+    val databaseURL = properties.getProperty("databaseURL")
+    val databaseDriver = properties.getProperty("databaseDriver")
+    
+    val tmpDir = System.getProperty("java.io.tmpdir")
+
+    val conf = new SparkConf().setMaster("local[2]").setAppName("Flowview analyzer")
+    val ssc = new StreamingContext(conf, Seconds(batchSeconds))
+    //ssc.sparkContext.hadoopConfiguration.set("textinputformat.record.delimiter", "\r\n\r\n");
     
     if(!new File(inputDirectory).exists()){
       printf("%s directory not found\n", inputDirectory)
       return
     }
+
+    logger.info("CDR Analyzer started")
     
-    if(!new File(outputDirectory).exists()){
-      printf("%s directory not found", outputDirectory)
-      return
+    // Definition of Sessions table
+    // timeMillis, bras, dslam, cdrRate, cdrRateChange, startCDRRatio, shortStopCDRRatio
+    class Sessions(tag: Tag) extends Table[(Long, String, String, Int)](tag, "SESSIONS") {
+      def timeMillis = column[Long]("TIMEMILLIS")
+      def bras = column[String]("BRAS")  // Column names must be capitalized
+      def dslam = column[String]("DSLAM")
+      def sessions = column[Int]("SESSIONS")
+
+      // Every table needs a * projection with the same type as the table's type parameter
+      def * = (timeMillis, bras, dslam, sessions)
     }
     
-    val tmpDir = System.getProperty("java.io.tmpdir")
-    
-    val conf = new SparkConf().setMaster("local[2]").setAppName("Flowview analyzer")
-    val ssc = new StreamingContext(conf, Seconds(batchSeconds))
-    //ssc.sparkContext.hadoopConfiguration.set("textinputformat.record.delimiter", "\r\n\r\n");
-    
-    val sparkSession = SparkSession.builder().enableHiveSupport().getOrCreate()
-    import sparkSession.implicits._
+    // Definition of CDR table
+    // timeMillis, bras, dslam, cdrRate, cdrRateChange, startCDRRatio, shortStopCDRRatio
+    class CdrStats(tag: Tag) extends Table[(Long, String, String, Float, Float, Float, Float)](tag, "CDRSTATS") {
+      def timeMillis = column[Long]("TIMEMILLIS")
+      def bras = column[String]("BRAS")
+      def dslam = column[String]("DSLAM")
+      def cdrRate = column[Float]("CDRRATE")
+      def cdrRateChange = column[Float]("CDRRATECHANGE")
+      def startCDRRatio = column[Float]("STARTCDRRATIO")
+      def shortStopCDRRatio = column[Float]("SHORTSTOPCDRRATIO")
 
-    
-    logger.warn("CDR Analyzer started")
-    
-    // Create schema for sessions
-    val sessionsSchema = StructType(Seq(
-        StructField("timeMillis", LongType, false),
-        StructField("bras", StringType, false),
-        StructField("dslam", StringType, false),
-        StructField("sessions", FloatType, false)
-     ))
-    
-    // Create schema for cdrStats
-    val cdrStatsSchema = StructType(Seq(
-        StructField("timeMillis", LongType, false),
-        StructField("bras", StringType, false),
-        StructField("dslam", StringType, false),
-        StructField("cdrRate", FloatType, false),
-        StructField("cdrRateChange", FloatType, false),
-        StructField("startCDRRatio", FloatType, false),
-        StructField("shortStopCDRRatio", FloatType, false)
-     ))
-     
-     sparkSession.sql("CREATE TABLE IF NOT EXISTS cdrStats (timeMillis BIGINT, bras STRING, dslam STRING, cdrRate FLOAT, cdrRateChange FLOAT, startCDRRatio FLOAT, shortStopCDRRatio FLOAT)")
-    
+      // Every table needs a * projection with the same type as the table's type parameter
+      def * = (timeMillis, bras, dslam, cdrRate, cdrRateChange, startCDRRatio, shortStopCDRRatio)
+    }
+         
     // Stream of raw CDR
     val cdrStream = ssc.textFileStream(inputDirectory).map(line => {
       val lineItems = line.split(",")
@@ -143,7 +149,7 @@ object CDRStats {
     // sessionStates key = sessionId, value = [Session]
     // If no new value for the key, cdrSeq will be empty --> return the same state (not changed)
     // If there are new values, order by date, get the oldest and return something if the session is open, None if session is closed
-    val sessionStates = cdrStream.updateStateByKey((cdrSeq, currState: Option[Session]) => {
+    val activeSessions = cdrStream.updateStateByKey((cdrSeq, currState: Option[Session]) => {
       if(cdrSeq.isEmpty) currState
       else{
         val lastCDR = cdrSeq.sortWith(_.lastUpdate > _.lastUpdate)(0)
@@ -152,15 +158,28 @@ object CDRStats {
       }
     })
     
-    ////////////////////////////////////////////////////
-    // Write Sessions
-    ////////////////////////////////////////////////////
-    sessionStates.foreachRDD(rdd => {
-      // Number of sessions per topology element ((nasIPAddress, dslam), <number of sessions>)
-      // item._2 is a session object
-      val aggrSessions = rdd.map(item => ((item._2.nasIPAddress, item._2.dslam), 1)).reduceByKey((a, b) => (a+b))
-      //aggrSessions.saveAsTextFile(outputDirectory + "/sessions/sessions" + currentTimestamp)
-      aggrSessions.saveAsTextFile(outputDirectory + "/sessions")
+    // Stream of aggregated sessions
+    val aggrSessions = activeSessions.map(item => {((item._2.nasIPAddress, item._2.dslam), 1)}).reduceByKey((a, b) => (a+b))
+    
+    // Store aggregated sessions
+    aggrSessions.foreachRDD((rdd, time) => {
+        rdd.foreachPartition(partitionRDD => {
+          val db = Database.forURL(databaseURL, driver = databaseDriver)
+          val itemsToInsert: ArrayBuffer[(Long, String, String, Int)] = ArrayBuffer()
+          partitionRDD.foreach( item => {
+              itemsToInsert += ((time.milliseconds, item._1._1, item._1._2, item._2))
+            }
+          )
+          val result = db.run(TableQuery[Sessions] ++= itemsToInsert)
+          result.onFailure {case e => println(e)}
+          result.onComplete(_ => db.close())
+        })
+        
+        // Delete old records from the driver
+        val db = Database.forURL(databaseURL, driver = databaseDriver)
+        val deleteAction = sqlu"delete from SESSIONS where TIMEMILLIS < ${time.milliseconds}"
+        val result = db.run(deleteAction)
+        result.onComplete(_ => db.close())
     })
     
     // Stream of number of CDR received per topology element ((nasIPAddress, dslam), (<totalcdr>, <start>, <shortstops>, <longstops>))
@@ -175,16 +194,6 @@ object CDRStats {
                 )
             )).reduceByKey((values1, values2) => (values1._1 + values2._1, values1._2 + values2._2, values1._3 + values2._3, values1._4 + values2._4))
       .mapValues(item => (item._1.toFloat/batchSeconds, item._2.toFloat/batchSeconds, item._3.toFloat/batchSeconds, item._4.toFloat/batchSeconds))
-      
-   ////////////////////////////////////////////////////
-   // Write Sessions
-   ////////////////////////////////////////////////////
-   /*
-   aggrCdrStream.foreachRDD(rdd => {
-     // This will not work in a cluster
-     rdd.saveAsTextFile(outputDirectory + "/cdrRate")
-   })
-   */
    
    // State is last cdrRate 4tuple
    // Returned value is (<timestamp>, <totalCDRRate>, <totalCDRRateChange>, <shortStopRatio>, <startStopRatio>)
@@ -215,20 +224,32 @@ object CDRStats {
      val currentTimestamp = time
      
      if(
-         totalCDRRateChange <= totalCDRDecreaseThreshold ||
-         totalCDRRateChange >= totalCDRIncreaseThreshold ||
-         shortStopCDRRatio >= shortStopCDRRatioThreshold ||
-         startCDRRatio <= startCDRRatioThreshold
+           !applyThresholds ||
+           totalCDRRateChange <= totalCDRDecreaseThreshold ||
+           totalCDRRateChange >= totalCDRIncreaseThreshold ||
+           shortStopCDRRatio >= shortStopCDRRatioThreshold ||
+           startCDRRatio <= startCDRRatioThreshold
          )
      Some(time.milliseconds, topologyElement._1, topologyElement._2, currentCDRRateVals._1, totalCDRRateChange, startCDRRatio, shortStopCDRRatio)
      else None
    }
     
    val cdrStats = aggrCdrStream.mapWithState(StateSpec.function(updateLastCDRRateState _))
-   cdrStats.foreachRDD(rdd => {
-     rdd.saveAsTextFile(outputDirectory + "/cdrStats")
-     rdd.toDF("timeMillis", "bras", "dslam", "cdrRate", "cdrRateChange", "startCDRRatio", "shortStopCDRRatio").write.insertInto("cdrStats")
-   })
+   cdrStats.foreachRDD { rdd => 
+     rdd.foreachPartition { partitionRDD => 
+          val db = Database.forURL(databaseURL, driver = databaseDriver)
+          val insertActions: ArrayBuffer[DBIO[Int]] = ArrayBuffer()
+          partitionRDD.foreach(
+              item => {
+                val insertRow: DBIO[Int] = sqlu"insert into cdrstats (timeMillis, bras, dslam, cdrRate, cdrRateChange, startCDRRatio, shortStopCDRRatio) values (${item._1}, ${item._2}, ${item._3}, ${item._4}, ${item._5}, ${item._6}, ${item._7})"
+                insertActions += insertRow
+              }
+          )
+          val result = db.run(DBIO.sequence(insertActions.toSeq))
+          result.onFailure {case e => println(e)}
+          result.onComplete(_ => db.close())
+     }
+   }
    
    ssc.checkpoint(tmpDir + "/sparkcheckpoint")
     
