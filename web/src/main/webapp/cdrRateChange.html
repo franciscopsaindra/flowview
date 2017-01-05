@@ -1,0 +1,50 @@
+<html>
+  <head>
+	<meta http-equiv="efresh" content="5">
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+    <script type="text/javascript">
+      google.charts.load('current', {'packages':['corechart']});
+      google.charts.setOnLoadCallback(drawChart);
+
+      function drawChart() {
+
+        // Sets chart options.
+        var options = {
+          width: 1000,
+	      height: 500,
+	      hAxis: {title: 'Seconds ago'},
+          vAxis: {title: 'BRAS/DSLAM Id'},
+	      title: 'Relevant events for change in accounting packet rate',
+          series: [
+  			{color: 'red', visibleInLegend: true, labelInLegend: 'below 50%'},
+  			{color: 'orange', visibleInLegend: true, labelInLegend: 'below 25%'},
+  			{color: 'lime', visibleInLegend: true, labelInLegend: 'above 20%'},
+  			{color: 'green', visibleInLegend: true, labelInLegend: 'above 50%'},
+			]
+        };
+
+        // Instantiates and draws our chart, passing in some options.
+        var chart = new google.visualization.ScatterChart(document.getElementById('myGraph'));
+        google.visualization.events.addListener(chart, 'select', selectHandler);
+        $.getJSON("/cdrStats/cdrRateChange")
+        	.done(function(jsData){
+        		var header = [['Seconds ago', 'below 50%', 'below 25%', 'above 25%', 'above 50%']];
+				var data = google.visualization.arrayToDataTable(header.concat(jsData.events));
+				chart.draw(data, options);
+        	})
+        	.fail(function(jqxhr, textStatus, error){
+        		alert(error);
+        	})
+        	
+		function selectHandler(){
+      		alert(JSON.stringify(chart.getSelection()))
+		}
+      }
+      
+    </script>
+  </head>
+  <body>
+    <div id="myGraph"></div>
+  </body>
+</html>
