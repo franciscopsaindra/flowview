@@ -43,28 +43,12 @@ class CdrStats(tag: Tag) extends Table[(Long, String, String, Float, Float, Floa
 
 class FlowViewMainServlet(db: Database) extends WebStack with JacksonJsonSupport {
   
-  /*
-  val jsonFormats = new DefaultFormats {
-    override def emptyValueStrategy
-  }
-  */
   implicit val jsonFormats = new DefaultFormats {
     override val emptyValueStrategy: EmptyValueStrategy = EmptyValueStrategy.preserve
     override val allowNull: Boolean = true
   }
  
   val logger = LoggerFactory.getLogger(getClass)
-
-  get("/") {
-    logger.debug("Requested /cdrStats/cdrRateChange")
-    
-    <html>
-      <body>
-        <h1>Hello, world!</h1>
-        Say <a href="hello-scalate">hello to Scalate</a>.
-      </body>
-    </html>
-  }
   
   get("/cdrStats/sessions"){
     logger.debug("Requested /cdrStats/sessions")
@@ -93,12 +77,8 @@ class FlowViewMainServlet(db: Database) extends WebStack with JacksonJsonSupport
       })
     }
     
-    val j: JValue = ("sessionsPerBras" -> sessionsPerBras)
-    logger.debug(j.toString);
-    
-    val jsonResult: JValue = ("sessionsPerDslam" -> sessionsPerDslam) ~ ("sessionsPerBras" -> sessionsPerBras)
-    
-    jsonResult
+   ("sessionsPerDslam" -> sessionsPerDslam) ~ ("sessionsPerBras" -> sessionsPerBras)
+
   }
   
   get("/cdrStats/cdrRateChange") {
