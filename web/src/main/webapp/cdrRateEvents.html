@@ -8,6 +8,9 @@
       google.charts.setOnLoadCallback(drawChart);
 
       function drawChart() {
+      
+      	var chartData;
+      	var fullData;
 
         // Sets chart options.
         var options = {
@@ -29,16 +32,45 @@
         google.visualization.events.addListener(chart, 'select', selectHandler);
         $.getJSON("/cdrStats/cdrRateChange")
         	.done(function(jsData){
+        		
+        		// Keep for later (processing of selectEvent)
+        		fullData = jsData;
+        		
+        		// Change format to what is needed for chart
+				var parsedData = makeGraphData(jsData.events);
+				
+				// Add fake point to make sure none of the columns has only null values, since Google Charts throws an exception
+				// int this case
+				parsedData.push([jsData["maxTime"], 0, 0, 0, 0]);
+				
         		var header = [['Seconds ago', 'below 50%', 'below 25%', 'above 25%', 'above 50%']];
-				var data = google.visualization.arrayToDataTable(header.concat(jsData.events));
-				chart.draw(data, options);
+        		chartData = header.concat(parsedData)
+				chart.draw(google.visualization.arrayToDataTable(chartData), options);
         	})
         	.fail(function(jqxhr, textStatus, error){
         		alert(error);
         	})
-        	
+		
+		// events contains an array of arrays of the form [timestamp, dslamId, <value>], where
+		// <value> is -2, -1, 1 or 2. Depending on <value>, one of the columns is filled, so that
+		// the point is represented on its corresponding series
+		function makeGraphData(events){
+			var parsedEvents = [];
+			for(var i = 0; i < events.length; i++){
+				var columnIndex = events[i][2];
+				if(columnIndex == -2) parsedEvents.push([events[i][0], events[i][1], null, null, null]);
+				if(columnIndex == -1) parsedEvents.push([events[i][0], null, events[i][1], null, null]);
+				if(columnIndex == 1) parsedEvents.push([events[i][0], null, null, events[i][1], null]);
+				if(columnIndex == 2) parsedEvents.push([events[i][0], null, null, null, events[i][1]]);
+			}
+			return parsedEvents;
+		}
+		
 		function selectHandler(){
-      		alert(JSON.stringify(chart.getSelection()))
+			//chart.getSelection() returns object {row:<row>, column:<column>}
+			var selection = chart.getSelection()[0];
+			var dslamId = chartData[(selection["row"] + 1)][selection["column"]];
+      		alert("DSLAM " + fullData["dslamMap"][dslamId]);
 		}
       }
       

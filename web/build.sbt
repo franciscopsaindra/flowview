@@ -29,7 +29,9 @@ libraryDependencies ++= Seq(
   "org.apache.derby" % "derbyclient" % "10.12.1.1",
   "com.typesafe.slick" %% "slick" % "3.1.1",
   "com.typesafe" % "config" % "1.3.1",
-  "com.typesafe.slick" % "slick-hikaricp_2.11" % "3.1.1"
+  "com.typesafe.slick" % "slick-hikaricp_2.11" % "3.1.1",
+  "org.scalatra" %% "scalatra-json" % ScalatraVersion,
+  "org.json4s" %% "json4s-jackson" % "3.3.0"
 )
 
 scalateTemplateConfig in Compile := {
