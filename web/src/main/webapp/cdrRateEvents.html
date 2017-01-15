@@ -1,6 +1,9 @@
 <html>
   <head>
-	<meta http-equiv="efresh" content="5">
+	<!--<meta http-equiv="refresh" content="5"> -->
+	<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+	<meta http-equiv="Pragma" content="no-cache"/>
+	<meta http-equiv="Expires" content="0"/>
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
     <script type="text/javascript">
@@ -70,7 +73,8 @@
 			//chart.getSelection() returns object {row:<row>, column:<column>}
 			var selection = chart.getSelection()[0];
 			var dslamId = chartData[(selection["row"] + 1)][selection["column"]];
-      		alert("DSLAM " + fullData["dslamMap"][dslamId]);
+      		// alert("DSLAM " + fullData["dslamMap"][dslamId]);
+      		location.href = "/cdrRateHist.html?dslam=" + fullData["dslamMap"][dslamId];
 		}
       }
       

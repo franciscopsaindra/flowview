@@ -4,62 +4,45 @@
 	<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 	<meta http-equiv="Pragma" content="no-cache"/>
 	<meta http-equiv="Expires" content="0"/>
+	
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
     <script type="text/javascript">
-      google.charts.load('current', {'packages':['treemap']});
+      google.charts.load('current', {'packages':['corechart']});
       google.charts.setOnLoadCallback(drawChart);
 
       function drawChart() {
 
         // Sets chart options        
         var options = {
-        	title: "Sessions per network element",
-	        highlightOnMouseOver: true,
-	        maxDepth: 1,
-	        maxPostDepth: 2,
-	        minHighlightColor: '#8c6bb1',
-	        midHighlightColor: '#9ebcda',
-	        maxHighlightColor: '#edf8fb',
-	        minColor: '#009688',
-	        midColor: '#f7f7f7',
-	        maxColor: '#ee8100',
-	        headerHeight: 15,
-	        showScale: true,
-	        height: 500,
-	        useWeightedAverageForAggregation: true
-      };
+        	title: "CDR rate for",
+        	hAxis: {title: "Seconds ago"},
+        	vAxis: {title: "CDR Rate (CDR/Sec)", minValue: 0},
+        	pointSize: 5
+      	};
 
         // Instantiates and draws our chart, passing in some options.
-        var chart = new google.visualization.TreeMap(document.getElementById('myGraph'));
+        var chart = new google.visualization.LineChart(document.getElementById('myGraph'));
 
         google.visualization.events.addListener(chart, 'select', selectHandler);
-        $.getJSON("/cdrStats/sessions")
+        $.getJSON("/cdrStats/cdrRateHist" + location.search)
         	.done(function(jsData){
+        	console.log(JSON.stringify(jsData))
         		
         		// Keep for later (processing of selectEvent)
         		fullData = jsData;
         		// Header
-        		var header = [['Node', 'Parent', 'Number of sessions']];
-        		// Dslam Sessions
-        		var chartData = header.concat(jsData.sessionsPerDslam);
-        		// Bras Sessions
-        		addBrasSessions(chartData, jsData.sessionsPerBras);
-        		// Global Session
-        		chartData.push(["Global", null, 0]);
-        		
+        		var header = [['Seconds Ago', 'Rate']];
+        		// Dslam Rate
+        		var chartData = header.concat(jsData.cdrRates);
+        		// Update title
+        		options.title += ("for " + jsData.dslam);
         		// Now, with all data in place, do the drawing
 				chart.draw(google.visualization.arrayToDataTable(chartData), options);
         	})
         	.fail(function(jqxhr, textStatus, error){
         		alert(error);
         	})
-		
-		function addBrasSessions(cdata, brasSessions){
-			for(var i = 0; i < brasSessions.length; i++){
-				cdata.push([brasSessions[i][0], "Global", 0]);
-			}
-		}
 		
 		function selectHandler(){
 			
