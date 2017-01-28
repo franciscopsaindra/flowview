@@ -2,16 +2,25 @@ package genfiles;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.FilenameFilter;
 import java.io.PrintWriter;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Properties;
 
+/**
+ * Splits a comma separated value CDR file into a set of smaller files, partitioned
+ * by date, which is assumed to be the first value on each CDR
+ * 
+ * @author francisco
+ *
+ */
 public class SplitFiles {
 	
-	private static final String FILE_PREFIX = "streamtest_";
+	private static final String FILE_PREFIX = "playback_";
 
 	/**
 	 * args[0] name of file
@@ -21,31 +30,38 @@ public class SplitFiles {
 	 * @param args
 	 */
 	public static void main(String[] args) throws Exception {
-		if(args.length!=4){
-			System.out.println("Usage: SplitFiles.sh <name_of_file> <name_of_output_dir> <seconds per file> <playback_speed>");
+		if(args.length < 1){
+			System.out.println("Usage: SplitFiles.sh <name_of_file> [<name_of_output_dir>] [<seconds per file>] [<playback_speed>]");
 			return;
 		}
-		String inputFile = args[0];
-		String outputDir = args[1]; outputDir=outputDir+"/";
-		String tmpDir = outputDir+"_tmp/";
-		long secondsPerFile = Long.parseLong(args[2]);
-		long playbackSpeed = Long.parseLong(args[3]);
 		
-		// Empty input directory
-		File inputDir = new File(outputDir);
-		File[] filesToDelete = inputDir.listFiles(new FilenameFilter() {
-   
-            public boolean accept(File dir, String name) {
-            	if(name.startsWith(FILE_PREFIX)) return true; else return false;
-            }
-		});
-		for(File file: filesToDelete) file.delete();
+		String inputFile = args[0];
+		
+		Properties confProperties = new Properties();
+		confProperties.load(new FileInputStream(new File(CreateFiles.class.getResource("/conf/splitfiles.properties").toURI())));
+		String outputDir = confProperties.getProperty("outputDirectory", "/tmp/streaminput")+"/";
+		String dateFormat = confProperties.getProperty("dateFormat", "yyyy-MM-dd HH:mm:ss");
+		long secondsPerFile = Long.parseLong(confProperties.getProperty("secondsPerFile", "60"));
+		long playbackSpeed = Long.parseLong(confProperties.getProperty("playbackSpeed", "10"));
+		
+		if(args.length > 1) outputDir = args[1] + "/";
+		if(args.length > 2) secondsPerFile = Long.parseLong(args[2]);
+		if(args.length > 3) Long.parseLong(args[3]);
+		
+		String tmpDir = System.getProperty("java.io.tmpdir")+"/";
+		if (!new File(outputDir).exists()){
+			System.out.println(outputDir+" does not exist. Exiting");
+			return;
+		}
+		
+		// Empty output directory
+		deleteFiles(outputDir);
 		
 		// Create dir for tmp file
 		new File(tmpDir).mkdirs();
 		
 		long fileNumber = 1;
-		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		SimpleDateFormat sdf = new SimpleDateFormat(dateFormat);
 		
 		BufferedReader br = new BufferedReader(new FileReader(inputFile));
 		long realStartTime = new Date().getTime();
@@ -93,8 +109,22 @@ public class SplitFiles {
 		
 		br.close();
 		
+		Thread.sleep(40000);
+		deleteFiles(outputDir);
+		
 		System.out.println("Finished");
 
 	}
-
+	
+	private static void deleteFiles(String dir){
+		// Empty output directory
+		File inputDir = new File(dir);
+		File[] filesToDelete = inputDir.listFiles(new FilenameFilter() {
+   
+            public boolean accept(File dir, String name) {
+            	if(name.startsWith(FILE_PREFIX)) return true; else return false;
+            }
+		});
+		for(File file: filesToDelete) file.delete();
+	}
 }

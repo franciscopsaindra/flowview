@@ -59,10 +59,10 @@ object CDRStats {
 
   def getDslam(nasport: String, nasIPAddress: String, sessionId: String): String = {
     if(sessionId.contains("atm")){
-      nasIPAddress.trim() + "/" + ((nasport.toInt & 16777215) >> 16) 
+      nasIPAddress.trim() + "/" + ((nasport.toLong & 16777215) >> 16) 
       
     } else {
-      nasIPAddress.trim() + "/" + ((nasport.toInt & 16777215) >> 12) 
+      nasIPAddress.trim() + "/" + ((nasport.toLong & 16777215) >> 12) 
     }
   }
   
@@ -139,10 +139,14 @@ object CDRStats {
     }
          
     // Stream of raw CDR
-    val cdrStream = ssc.textFileStream(inputDirectory).map(line => {
-      val lineItems = line.split(",")
-      val cdr = CDR(lineItems(0).trim(), lineItems(1).trim(), lineItems(2).trim(), lineItems(3).trim(), lineItems(4).trim(), lineItems(5).trim(), lineItems(6).trim(), lineItems(7).trim(), lineItems(8).trim().toLong, lineItems(9).trim().toLong, lineItems(10).trim().toLong, lineItems(11).trim(), lineItems(12).trim(), lineItems(13).trim(), getDslam(lineItems(6), lineItems(7), lineItems(2)))
-      (cdr.sessionId, cdr)
+    val cdrStream = ssc.textFileStream(inputDirectory).flatMap(line => {
+      if(line.count(_ == ',') == 13){
+        val lineItems = line.split(",")
+        val terminationCause = if(lineItems.length >= 14) lineItems(13).trim() else "none"
+        val cdr = CDR(lineItems(0).trim(), lineItems(1).trim(), lineItems(2).trim(), lineItems(3).trim(), lineItems(4).trim(), lineItems(5).trim(), lineItems(6).trim(), lineItems(7).trim(), lineItems(8).trim().toLong, lineItems(9).trim().toLong, lineItems(10).trim().toLong, lineItems(11).trim(), lineItems(12).trim(), terminationCause, getDslam(lineItems(6), lineItems(7), lineItems(2)))
+        Seq((cdr.sessionId, cdr))
+      }
+      else Seq()
     })
     
     // Stream of current session states
@@ -159,11 +163,16 @@ object CDRStats {
     })
     
     // Stream of aggregated sessions
-    val aggrSessions = activeSessions.map(item => {((item._2.nasIPAddress, item._2.dslam), 1)}).reduceByKey((a, b) => (a+b))
+    val aggrSessions = activeSessions
+    .map(session => {
+      ((session._2.nasIPAddress, session._2.dslam), 1)
+    })
+    .reduceByKey((a, b) => (a+b))
     
     // Store aggregated sessions
     aggrSessions.foreachRDD((rdd, time) => {
         rdd.foreachPartition(partitionRDD => {
+          // Connections should be cached
           val db = Database.forURL(databaseURL, driver = databaseDriver)
           val itemsToInsert: ArrayBuffer[(Long, String, String, Int)] = ArrayBuffer()
           partitionRDD.foreach( item => {
@@ -193,32 +202,31 @@ object CDRStats {
                   if(item._2.state == "C" && item._2.duration >= shortStopThresholdSeconds) 1 else 0
                 )
             )).reduceByKey((values1, values2) => (values1._1 + values2._1, values1._2 + values2._2, values1._3 + values2._3, values1._4 + values2._4))
-      .mapValues(item => (item._1.toFloat/batchSeconds, item._2.toFloat/batchSeconds, item._3.toFloat/batchSeconds, item._4.toFloat/batchSeconds))
+      .mapValues(item => (item._1.toFloat, item._2.toFloat, item._3.toFloat, item._4.toFloat))
    
-   // State is last cdrRate 4tuple
-   // Returned value is (<timestamp>, <totalCDRRate>, <totalCDRRateChange>, <shortStopRatio>, <startStopRatio>)
-   //val updateLastCDRRateState = (topologyElement: (String, String), cdrRateVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]) => {
-   def updateLastCDRRateState(time: Time, topologyElement: (String, String), cdrRateVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]): Option[(Long, String, String, Float, Float, Float, Float)] = {
+   // State is last cdrRate 4tuple (<totalcdr>, <start>, <shortstops>, <longstops>)
+   // Returned value is (<timestamp>, <totalCDRRate>, <totalCDRRateChange>, <startCDRRatio>, <shortStopCDRRatio>)
+   def updateLastCDRRateState(time: Time, topologyElement: (String, String), cdrVals: Option[(Float, Float, Float, Float)], state: State[(Float, Float, Float, Float)]): Option[(Long, String, String, Float, Float, Float, Float)] = {
      // New state is last received data
      val lastState = state.getOption().getOrElse[(Float, Float, Float, Float)]((0, 0, 0, 0))
      
      // Update state
-     val currentCDRRateVals = cdrRateVals.getOrElse[(Float, Float, Float, Float)]((0, 0, 0, 0))
-     state.update(currentCDRRateVals)
+     val currentCDRVals = cdrVals.getOrElse[(Float, Float, Float, Float)]((0, 0, 0, 0))
+     state.update(currentCDRVals)
      
      // Get current stats
      
      // Drop or increase of CDRRate %1
      // Number between -1 and infinity. Normal value is 0
-     val totalCDRRateChange = if(lastState._1 > 0 && lastState._1 > minCDRThreshold) ((currentCDRRateVals._1 - lastState._1)/ lastState._1) else 0
+     val totalCDRRateChange = if(lastState._1 > 0 && lastState._1 > minCDRThreshold) ((currentCDRVals._1 - lastState._1)/ lastState._1) else 0
      
      // Ratio of short CDR to total CDR
      // Number between 0 and 1. Normal value is 0
-     val shortStopCDRRatio = if(currentCDRRateVals._1 > 0 && currentCDRRateVals._1 > minCDRThreshold) (currentCDRRateVals._3 / currentCDRRateVals._1) else 0
+     val shortStopCDRRatio = if(currentCDRVals._1 > 0 && currentCDRVals._1 > minCDRThreshold) (currentCDRVals._3 / currentCDRVals._1) else 0
      
      // Ratio of start to total CDR
      // Number between 0 and 1. Normal value depends on the interim interval. Typically 0.7
-     val startCDRRatio = if(currentCDRRateVals._1 > 0 && currentCDRRateVals._1 > minCDRThreshold) (currentCDRRateVals._2 / currentCDRRateVals._1) else 1
+     val startCDRRatio = if(currentCDRVals._1 > 0 && currentCDRVals._1 > minCDRThreshold) (currentCDRVals._2 / currentCDRVals._1) else 1
      
      // Calculate output
      val currentTimestamp = time
@@ -230,11 +238,14 @@ object CDRStats {
            shortStopCDRRatio >= shortStopCDRRatioThreshold ||
            startCDRRatio <= startCDRRatioThreshold
          )
-     Some(time.milliseconds, topologyElement._1, topologyElement._2, currentCDRRateVals._1, totalCDRRateChange, startCDRRatio, shortStopCDRRatio)
+     Some(time.milliseconds, topologyElement._1, topologyElement._2, currentCDRVals._1/batchSeconds, totalCDRRateChange, startCDRRatio, shortStopCDRRatio)
      else None
    }
-    
+   
+   // New stream containing stats
    val cdrStats = aggrCdrStream.mapWithState(StateSpec.function(updateLastCDRRateState _))
+   
+   // Persist
    cdrStats.foreachRDD { rdd => 
      rdd.foreachPartition { partitionRDD => 
           val db = Database.forURL(databaseURL, driver = databaseDriver)
